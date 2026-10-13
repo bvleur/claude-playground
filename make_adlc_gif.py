@@ -1,10 +1,12 @@
-"""Render a YMCA-style dance GIF where the dancer spells A, D, L, C."""
+"""Render a YMCA-style dance GIF: a costumed troupe spells A, D, L, C together."""
 import math
+import os
 from PIL import Image, ImageDraw, ImageFont
 
-W = H = 480
+W, H = 720, 480
 SS = 2  # supersampling factor
 OUT = "adlc-dance.gif"
+PREVIEW_DIR = os.environ.get("PREVIEW_DIR")  # optional: dump one still per letter
 
 FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
@@ -19,9 +21,24 @@ POSES = {
 ORDER = "ADLC"
 
 BG_TOP, BG_BOT = (44, 16, 92), (214, 54, 140)
-FIG = (255, 226, 64)
-FIG_EDGE = (60, 20, 70)
-GLOW = (255, 255, 255)
+EDGE = (40, 16, 50)
+
+# The troupe: classic costume archetypes, drawn as cartoons.
+CAST = [
+    dict(role="cop", skin=(236, 190, 150), shirt=(34, 52, 120), sleeve_skin=False,
+         pants=(24, 36, 90), shoes=(20, 20, 24), hat="cop", stache=True, shades=True),
+    dict(role="construction", skin=(190, 130, 92), shirt=(60, 110, 190), sleeve_skin=True,
+         pants=(60, 80, 130), shoes=(120, 80, 40), hat="hardhat", stache=True, vest=(255, 140, 20)),
+    dict(role="cowboy", skin=(240, 200, 160), shirt=(230, 230, 220), sleeve_skin=False,
+         pants=(70, 100, 170), shoes=(110, 60, 30), hat="cowboy", stache=False, vest=(130, 80, 40),
+         bandana=(210, 40, 40)),
+    dict(role="biker", skin=(150, 100, 70), shirt=(25, 25, 28), sleeve_skin=True,
+         pants=(25, 25, 28), shoes=(15, 15, 15), hat="biker", stache=True, shades=True, vest=(10, 10, 12)),
+    dict(role="sailor", skin=(230, 180, 140), shirt=(245, 245, 250), sleeve_skin=False,
+         pants=(245, 245, 250), shoes=(30, 30, 50), hat="sailor", stache=False, collar=(30, 50, 120)),
+]
+SCALE = 0.8
+SPACING = 126
 
 
 def lerp(a, b, t):
@@ -52,7 +69,7 @@ def seg(origin, angle, length):
 
 
 def font(size):
-    return ImageFont.truetype(FONT_BOLD, size * SS)
+    return ImageFont.truetype(FONT_BOLD, int(size * SS))
 
 
 def background():
@@ -70,94 +87,133 @@ BG = background()
 def draw_letter_backdrop(img, letter, strength, pulse):
     over = Image.new("RGBA", img.size, (0, 0, 0, 0))
     d = ImageDraw.Draw(over)
-    f = font(int(300 + 14 * pulse))
-    d.text((W * SS // 2, int(H * SS * 0.44)), letter, font=f, fill=(255, 255, 255, int(70 * strength)), anchor="mm")
+    d.text((W * SS // 2, int(H * SS * 0.46)), letter, font=font(340 + 14 * pulse),
+           fill=(255, 255, 255, int(60 * strength)), anchor="mm")
     img.paste(over, (0, 0), over)
 
 
-def draw_figure(d, pose, bounce, tilt):
-    cx, hip_y = 240 * SS, (292 + bounce) * SS
-    s = SS
+def dot(d, p, r, fill, outline=None, width=0):
+    d.ellipse([p[0] - r, p[1] - r, p[0] + r, p[1] + r], fill=fill, outline=outline, width=width)
+
+
+def thick(d, pts, w, col):
+    """Round-capped polyline with a dark outline."""
+    for ww, c in ((w + 4 * SS * SCALE, EDGE), (w, col)):
+        d.line(pts, fill=c, width=int(ww), joint="curve")
+        for p in pts:
+            dot(d, p, ww / 2, c)
+
+
+def draw_hat(d, kind, hc, hr, k):
+    """Hat drawn relative to head centre hc / radius hr (k = pixel unit)."""
+    x, y = hc
+    if kind == "hardhat":
+        d.pieslice([x - hr * 1.1, y - hr * 1.25, x + hr * 1.1, y + hr * 0.95], 180, 360, fill=(255, 215, 30), outline=EDGE, width=int(1.5 * k))
+        d.rectangle([x - hr * 1.3, y - hr * 0.3, x + hr * 1.3, y - hr * 0.05], fill=(255, 215, 30), outline=EDGE, width=int(1.5 * k))
+        d.rectangle([x - hr * 0.12, y - hr * 1.15, x + hr * 0.12, y - hr * 0.3], fill=(230, 180, 20))
+    elif kind == "cop":
+        d.pieslice([x - hr * 1.05, y - hr * 1.3, x + hr * 1.05, y + hr * 0.7], 180, 360, fill=(24, 36, 90), outline=EDGE, width=int(1.5 * k))
+        d.rectangle([x - hr * 1.1, y - hr * 0.35, x + hr * 1.1, y - hr * 0.08], fill=(10, 14, 40), outline=EDGE, width=int(1.5 * k))
+        dot(d, (x, y - hr * 0.7), hr * 0.17, (255, 215, 30), EDGE, int(k))
+    elif kind == "cowboy":
+        d.ellipse([x - hr * 1.7, y - hr * 0.55, x + hr * 1.7, y + hr * 0.05], fill=(150, 100, 55), outline=EDGE, width=int(1.5 * k))
+        d.pieslice([x - hr * 0.95, y - hr * 1.4, x + hr * 0.95, y + hr * 0.3], 180, 360, fill=(150, 100, 55), outline=EDGE, width=int(1.5 * k))
+        d.rectangle([x - hr * 0.95, y - hr * 0.5, x + hr * 0.95, y - hr * 0.3], fill=(90, 55, 30))
+    elif kind == "biker":
+        d.pieslice([x - hr * 1.05, y - hr * 1.2, x + hr * 1.05, y + hr * 0.7], 180, 360, fill=(20, 20, 22), outline=EDGE, width=int(1.5 * k))
+        d.polygon([(x - hr * 1.1, y - hr * 0.3), (x + hr * 1.1, y - hr * 0.3), (x + hr * 1.1, y - hr * 0.05), (x, y + hr * 0.1), (x - hr * 1.1, y - hr * 0.05)], fill=(20, 20, 22), outline=EDGE)
+        dot(d, (x, y - hr * 0.7), hr * 0.14, (200, 200, 210))
+    elif kind == "sailor":
+        d.pieslice([x - hr * 1.0, y - hr * 1.3, x + hr * 1.0, y + hr * 0.7], 180, 360, fill=(250, 250, 252), outline=EDGE, width=int(1.5 * k))
+        d.rectangle([x - hr * 1.05, y - hr * 0.35, x + hr * 1.05, y - hr * 0.05], fill=(30, 50, 120), outline=EDGE, width=int(1.5 * k))
+
+
+def draw_figure(d, actor, pose, bounce, tilt, cx):
+    k = SS * SCALE
     lean = pose["lean"] + tilt
-    torso_len, arm_seg, leg_seg = 78 * s, 52 * s, 58 * s
-
-    hip = (cx, hip_y)
+    hip = (cx * SS, (392 + bounce) * SS - 116 * k)
+    torso_len, arm_seg, leg_seg = 78 * k, 52 * k, 58 * k
     neck = seg(hip, 90 + lean, torso_len)
-    lw = 11 * s
-
-    def limb(start, a1, a2, l1, l2, col=FIG):
-        mid = seg(start, a1, l1)
-        end = seg(mid, a2, l2)
-        for w, c in ((lw + 5 * s, FIG_EDGE), (lw, col)):
-            d.line([start, mid, end], fill=c, width=w, joint="curve")
-            for p in (start, mid, end):
-                d.ellipse([p[0] - w / 2, p[1] - w / 2, p[0] + w / 2, p[1] + w / 2], fill=c)
-        return end
-
     ra_u, ra_f, la_u, la_f = pose["arms"]
     rl_u, rl_f, ll_u, ll_f = pose["legs"]
 
-    # legs
-    feet = []
+    # legs + shoes
     for a1, a2 in ((rl_u, rl_f), (ll_u, ll_f)):
-        feet.append(limb(hip, a1, a2, leg_seg, leg_seg))
+        mid = seg(hip, a1, leg_seg)
+        foot = seg(mid, a2, leg_seg)
+        thick(d, [hip, mid, foot], 15 * k, actor["pants"])
+        dot(d, foot, 9 * k, actor["shoes"], EDGE, int(1.5 * k))
     # torso
-    for w, c in ((lw + 5 * s, FIG_EDGE), (lw + 2 * s, FIG)):
-        d.line([hip, neck], fill=c, width=w)
-        for p in (hip, neck):
-            d.ellipse([p[0] - w / 2, p[1] - w / 2, p[0] + w / 2, p[1] + w / 2], fill=c)
-    # shoes
-    for (fx, fy), a in zip(feet, (rl_f, ll_f)):
-        r = 9 * s
-        d.ellipse([fx - r, fy - r, fx + r, fy + r], fill=(255, 90, 90), outline=FIG_EDGE, width=2 * s)
-    # arms (from shoulders)
-    sh_r = seg(neck, lean, 13 * s)
-    sh_l = seg(neck, 180 + lean, 13 * s)
-    sh_r = (sh_r[0], sh_r[1] + 6 * s)
-    sh_l = (sh_l[0], sh_l[1] + 6 * s)
-    hands = [limb(sh_r, ra_u, ra_f, arm_seg, arm_seg), limb(sh_l, la_u, la_f, arm_seg, arm_seg)]
-    for hx, hy in hands:
-        r = 8 * s
-        d.ellipse([hx - r, hy - r, hx + r, hy + r], fill=FIG, outline=FIG_EDGE, width=2 * s)
+    thick(d, [hip, neck], 27 * k, actor["shirt"])
+    if "vest" in actor:
+        thick(d, [seg(hip, 90 + lean, 6 * k), seg(hip, 90 + lean, torso_len - 6 * k)], 19 * k, actor["vest"])
+    if "collar" in actor:
+        thick(d, [seg(neck, 90 + lean, -8 * k), neck], 22 * k, actor["collar"])
+    if "bandana" in actor:
+        thick(d, [seg(neck, 90 + lean, -4 * k), seg(neck, 90 + lean, 2 * k)], 15 * k, actor["bandana"])
+    # belt
+    dot(d, seg(hip, 90 + lean, 5 * k), 4 * k, (230, 200, 60))
+    # arms
+    sh_r = seg(neck, lean, 11 * k)
+    sh_l = seg(neck, 180 + lean, 11 * k)
+    sh_r, sh_l = (sh_r[0], sh_r[1] + 7 * k), (sh_l[0], sh_l[1] + 7 * k)
+    for sh, a1, a2 in ((sh_r, ra_u, ra_f), (sh_l, la_u, la_f)):
+        el = seg(sh, a1, arm_seg)
+        hand = seg(el, a2, arm_seg)
+        thick(d, [sh, el], 13 * k, actor["shirt"] if not actor["sleeve_skin"] else actor["shirt"])
+        thick(d, [el, hand], 11 * k, actor["skin"] if actor["sleeve_skin"] or actor["role"] in ("sailor", "cop") else actor["shirt"])
+        dot(d, hand, 7.5 * k, actor["skin"] if actor["role"] != "biker" else (20, 20, 22), EDGE, int(1.5 * k))
     # head
-    head_c = seg(neck, 90 + lean, 24 * s)
-    hr = 24 * s
-    d.ellipse([head_c[0] - hr, head_c[1] - hr, head_c[0] + hr, head_c[1] + hr], fill=FIG, outline=FIG_EDGE, width=3 * s)
-    ex = 8 * s
-    for sx in (-1, 1):
-        ex_c = (head_c[0] + sx * ex, head_c[1] - 4 * s)
-        d.ellipse([ex_c[0] - 3 * s, ex_c[1] - 4 * s, ex_c[0] + 3 * s, ex_c[1] + 4 * s], fill=FIG_EDGE)
-    d.arc([head_c[0] - 12 * s, head_c[1] - 8 * s, head_c[0] + 12 * s, head_c[1] + 12 * s], 20, 160, fill=FIG_EDGE, width=3 * s)
+    hr = 20 * k
+    hc = seg(neck, 90 + lean, 22 * k)
+    dot(d, hc, hr, actor["skin"], EDGE, int(2 * k))
+    draw_face(d, actor, hc, hr, k)
+    draw_hat(d, actor["hat"], hc, hr, k)
+
+
+def draw_face(d, actor, hc, hr, k):
+    x, y = hc
+    if actor.get("shades"):
+        d.rectangle([x - hr * 0.85, y - hr * 0.3, x - hr * 0.1, y + hr * 0.1], fill=(15, 15, 20))
+        d.rectangle([x + hr * 0.1, y - hr * 0.3, x + hr * 0.85, y + hr * 0.1], fill=(15, 15, 20))
+        d.line([(x - hr * 0.1, y - hr * 0.22), (x + hr * 0.1, y - hr * 0.22)], fill=(15, 15, 20), width=int(1.5 * k))
+    else:
+        for sx in (-1, 1):
+            dot(d, (x + sx * hr * 0.38, y - hr * 0.12), 2.2 * k, EDGE)
+    if actor.get("stache"):
+        d.pieslice([x - hr * 0.6, y + hr * 0.05, x + hr * 0.6, y + hr * 0.6], 180, 360, fill=(40, 24, 16))
+        d.arc([x - hr * 0.35, y + hr * 0.3, x + hr * 0.35, y + hr * 0.8], 20, 160, fill=EDGE, width=int(1.5 * k))
+    else:
+        d.arc([x - hr * 0.5, y - hr * 0.1, x + hr * 0.5, y + hr * 0.65], 20, 160, fill=EDGE, width=int(2 * k))
 
 
 def draw_floor(d):
-    y = 372 * SS
+    y = 392 * SS
     d.rectangle([0, y, W * SS, H * SS], fill=(30, 10, 60))
     d.line([(0, y), (W * SS, y)], fill=(255, 120, 200), width=3 * SS)
 
 
 def draw_header(d, current):
-    f = font(46)
-    gap = 84 * SS
-    x0 = W * SS // 2 - int(1.5 * gap)
+    f = font(44)
+    gap = 84
+    x0 = W // 2 - int(1.5 * gap)
     for i, ch in enumerate(ORDER):
         on = ch == current
-        d.text((x0 + i * gap, 44 * SS), ch, font=f, anchor="mm",
-               fill=(255, 255, 255) if on else (255, 255, 255, 0) if False else (150, 110, 190),
+        d.text(((x0 + i * gap) * SS, 40 * SS), ch, font=f, anchor="mm",
+               fill=(255, 255, 255) if on else (150, 110, 190),
                stroke_width=(3 if on else 0) * SS, stroke_fill=(255, 90, 160))
 
 
 def draw_caption(d, current):
-    f = font(22)
-    parts = [("It's fun to work on the ", None)] + [(ch, ch) for ch in ORDER]
-    pieces = []
-    for text, ch in parts:
-        pieces.append((text, ch))
-        if ch is not None and ch != ORDER[-1]:
+    f = font(26)
+    pieces = [("It's fun to work on the ", None)]
+    for i, ch in enumerate(ORDER):
+        pieces.append((ch, ch))
+        if i < len(ORDER) - 1:
             pieces.append((" ", None))
     total = sum(d.textlength(t, font=f) for t, _ in pieces)
     x = (W * SS - total) / 2
-    y = 424 * SS
+    y = 436 * SS
     for t, ch in pieces:
         hot = ch is not None and ch == current
         d.text((x, y), t, font=f, anchor="lm",
@@ -172,7 +228,9 @@ def render(pose, current, bounce, tilt, pulse, strength):
     d = ImageDraw.Draw(img)
     draw_floor(d)
     draw_header(d, current)
-    draw_figure(d, pose, bounce, tilt)
+    x0 = W / 2 - SPACING * (len(CAST) - 1) / 2
+    for i, actor in enumerate(CAST):
+        draw_figure(d, actor, pose, bounce, tilt, x0 + i * SPACING)
     draw_caption(d, current)
     return img.convert("RGB").resize((W, H), Image.LANCZOS)
 
@@ -192,8 +250,9 @@ def main():
                                  pulse=math.sin(2 * ph), strength=1.0))
     pal = [f.quantize(colors=128, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE) for f in frames]
     pal[0].save(OUT, save_all=True, append_images=pal[1:], duration=85, loop=0, disposal=2)
-    for i, ch in enumerate(ORDER):  # contact sheet frames for review
-        frames[i * (n_trans + n_hold) + n_trans + 2].save(f"/tmp/claude-0/-home-user-claude-playground/352e9488-741c-5873-9c7a-7dbead46f232/scratchpad/adlc_{ch}.png")
+    if PREVIEW_DIR:
+        for i, ch in enumerate(ORDER):
+            frames[i * (n_trans + n_hold) + n_trans + 2].save(os.path.join(PREVIEW_DIR, f"adlc_{ch}.png"))
     print(len(frames), "frames")
 
 
